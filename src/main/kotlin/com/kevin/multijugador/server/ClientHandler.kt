@@ -13,7 +13,7 @@ class ClientHandler(
         val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
         val writer = PrintWriter(socket.getOutputStream(), true)
 
-        println("🔌 Cliente conectado: ${socket.inetAddress.hostAddress}")
+        println("Cliente conectado: ${socket.inetAddress.hostAddress}")
 
         try {
             val records = recordsStore.loadRawJson()
