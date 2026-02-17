@@ -141,6 +141,10 @@ object ClientMain {
                                 client.send(MessageType.MAKE_MOVE, """{"row":$r,"col":$c}""")
                             }
                         }
+
+                        MessageType.RECORDS_SYNC -> {
+                            client.setRecordsJson(env.payloadJson)
+                        }
                     }
                 }
             }

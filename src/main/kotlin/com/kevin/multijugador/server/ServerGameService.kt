@@ -57,6 +57,7 @@ class ServerGameService(
         if (winner != null) {
             broadcastState(session, nextPlayerOverride = "")
             applyResultToRecords(session, winner)
+            pushRecords(session)
             broadcastRoundEnd(session, winner)
             endSession(session)
             return
@@ -65,6 +66,7 @@ class ServerGameService(
         if (draw) {
             broadcastState(session, nextPlayerOverride = "")
             applyDrawToRecords(session)
+            pushRecords(session)
             broadcastRoundEnd(session, "DRAW")
             endSession(session)
             return
@@ -72,6 +74,12 @@ class ServerGameService(
 
         session.next = if (session.next == 'X') 'O' else 'X'
         broadcastState(session)
+    }
+
+    private fun pushRecords(session: GameSession) {
+        val records = recordsStore.loadRawJson()
+        session.playerX.send(MessageType.RECORDS_SYNC, records)
+        session.playerO.send(MessageType.RECORDS_SYNC, records)
     }
 
     private fun applyResultToRecords(session: GameSession, winner: String) {
