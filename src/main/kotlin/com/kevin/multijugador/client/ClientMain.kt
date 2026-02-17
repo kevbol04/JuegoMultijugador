@@ -172,6 +172,9 @@ object ClientMain {
 
                     "5" -> {
                         println("Saliendo...")
+                        mySymbol.set(null)
+                        lastState.set(null)
+                        clientState.set(ClientState.MENU)
                         client.close()
                         return@runBlocking
                     }

@@ -41,10 +41,12 @@ class TcpClient(
                 val line = reader.readLine() ?: break
                 onLine(line)
             }
-        } finally {
-            close()
+        } catch (_: java.net.SocketException) {
+        } catch (_: java.io.IOException) {
+        } catch (e: Exception) {
         }
     }
+
 
     fun setRecordsJson(json: String) {
         recordsJson = json
