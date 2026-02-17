@@ -12,22 +12,9 @@ class ClientConnection(
     private val closed = AtomicBoolean(false)
 
     fun send(type: String, payloadJson: String) {
-        if (closed.get()) {
-            println("SERVER -> intento enviar pero conexión marcada como cerrada")
-            return
-        }
-
-        val msg = JsonCodec.encode(type, payloadJson)
-
-        try {
-            writer.println(msg)
-            writer.flush()
-            println("SERVER ENVÍA RAW -> $msg")
-        } catch (e: Exception) {
-            println("SERVER -> fallo enviando: ${e.message}")
-            e.printStackTrace()
-            throw e
-        }
+        if (closed.get()) return
+        writer.println(JsonCodec.encode(type, payloadJson))
+        writer.flush()
     }
 
     fun close() {

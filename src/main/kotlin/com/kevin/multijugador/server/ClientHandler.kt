@@ -28,17 +28,13 @@ class ClientHandler(
 
             while (true) {
                 val line = reader.readLine() ?: break
-                println("SERVER RECIBE -> $line")
 
                 val env = JsonCodec.decode(line) ?: continue
-                println("SERVER DECODE -> ${env?.type} | payload=${env?.payloadJson}")
                 if (env == null) continue
 
                 when (env.type) {
                     MessageType.JOIN_QUEUE -> {
-                        println("SERVER -> antes de enviar WAITING")
                         conn.send(MessageType.QUEUE_STATUS, """{"status":"WAITING"}""")
-                        println("SERVER -> después de enviar WAITING")
 
                         val (a, b) = queue.tryEnqueue(conn)
                         if (a != null && b != null) {

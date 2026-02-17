@@ -9,36 +9,43 @@ import java.util.concurrent.atomic.AtomicReference
 
 object ClientMain {
 
+    private enum class ClientState {
+        MENU, QUEUE, IN_GAME
+    }
+
     @JvmStatic
     fun main(args: Array<String>) = runBlocking {
         val cfg = ClientConfigLoader.load()
-        println("DEBUG -> Conectando a ${cfg.host}:${cfg.port}")
-
         val client = TcpClient(cfg.host, cfg.port)
 
         val mySymbol = AtomicReference<String?>(null)
         val lastState = AtomicReference<String?>(null)
+        val clientState = AtomicReference(ClientState.MENU)
 
         try {
             client.connect()
 
-            val readerJob = launch(Dispatchers.IO) {
-                println("DEBUG -> readLoop iniciado")
+            launch(Dispatchers.IO) {
                 client.readLoop { line ->
-                    println("<< SERVER: $line")
-
                     val env = JsonCodec.decode(line) ?: return@readLoop
 
                     when (env.type) {
+
                         MessageType.QUEUE_STATUS -> {
-                            if (env.payloadJson.contains("WAITING")) println("Esperando rival...")
-                            if (env.payloadJson.contains("MATCHED")) println("Rival encontrado.")
+                            if (env.payloadJson.contains("WAITING")) {
+                                println("\nEsperando rival...")
+                                clientState.set(ClientState.QUEUE)
+                            }
+                            if (env.payloadJson.contains("MATCHED")) {
+                                println("\nRival encontrado.")
+                            }
                         }
 
                         MessageType.GAME_START -> {
                             val sym = extractString(env.payloadJson, "yourSymbol")
                             mySymbol.set(sym)
-                            println("🎮 Partida iniciada. Tu símbolo: $sym")
+                            clientState.set(ClientState.IN_GAME)
+                            println("\n🎮 Partida iniciada. Tu símbolo: $sym")
                         }
 
                         MessageType.GAME_STATE -> {
@@ -47,6 +54,7 @@ object ClientMain {
 
                             val next = extractString(env.payloadJson, "nextPlayer")
                             val mine = mySymbol.get()
+
                             if (mine != null && next == mine) {
                                 val (r, c) = askMove()
                                 client.send(MessageType.MAKE_MOVE, """{"row":$r,"col":$c}""")
@@ -55,34 +63,33 @@ object ClientMain {
 
                         MessageType.ROUND_END -> {
                             val winner = extractString(env.payloadJson, "winner")
+
                             when (winner) {
-                                "DRAW" -> println("🤝 Empate.")
-                                "X", "O" -> println("🏆 Ganador: $winner")
-                                else -> println("Fin de ronda.")
+                                "DRAW" -> println("\n🤝 Empate.")
+                                "X", "O" -> println("\n🏆 Ganador: $winner")
+                                else -> println("\nFin de ronda.")
                             }
+
                             mySymbol.set(null)
                             lastState.set(null)
+                            clientState.set(ClientState.MENU)
                         }
 
                         MessageType.ERROR -> {
                             val msg = extractString(env.payloadJson, "message")
                             println("ERROR: $msg")
-
-                            val state = lastState.get()
-                            val mine = mySymbol.get()
-                            if (state != null && mine != null) {
-                                val next = extractString(state, "nextPlayer")
-                                if (next == mine) {
-                                    val (r, c) = askMove()
-                                    client.send(MessageType.MAKE_MOVE, """{"row":$r,"col":$c}""")
-                                }
-                            }
                         }
                     }
                 }
             }
 
             while (true) {
+
+                if (clientState.get() != ClientState.MENU) {
+                    Thread.sleep(200)
+                    continue
+                }
+
                 println()
                 println("===== MENÚ PRINCIPAL =====")
                 println("1. Nueva Partida PVP")
@@ -94,23 +101,21 @@ object ClientMain {
 
                 when (readLine()?.trim()) {
                     "1" -> {
-                        println(">> ENVIANDO JOIN_QUEUE")
                         client.send(MessageType.JOIN_QUEUE, """{}""")
+                        clientState.set(ClientState.QUEUE)
                     }
                     "3" -> {
-                        println("\n--- RECORDS (descargados del servidor) ---")
+                        println("\n--- RECORDS ---")
                         println(client.recordsJson)
                     }
                     "5" -> {
                         println("Saliendo...")
                         client.close()
-                        break
+                        return@runBlocking
                     }
-                    else -> println("Opción no válida o pendiente.")
+                    else -> println("Opción no válida.")
                 }
             }
-
-            readerJob.cancel()
 
         } catch (e: Exception) {
             println("Error cliente: ${e.message}")
@@ -127,7 +132,7 @@ object ClientMain {
             val c = readLine()?.trim()?.toIntOrNull()
 
             if (r != null && c != null && r in 0..2 && c in 0..2) return r to c
-            println("Entrada inválida. Prueba otra vez.")
+            println("Entrada inválida.")
         }
     }
 
@@ -153,34 +158,29 @@ object ClientMain {
     }
 
     private fun extractString(json: String, field: String): String? {
-        val key = """"$field":"""
-        val idx = json.indexOf(key)
-        if (idx == -1) return null
-        val afterKey = idx + key.length
-        if (afterKey >= json.length || json[afterKey] != '"') return null
-        val start = afterKey + 1
-        val end = json.indexOf('"', start)
-        if (end == -1) return null
-        return json.substring(start, end)
+        val regex = """"$field"\s*:\s*"([^"]*)"""".toRegex()
+        return regex.find(json)?.groupValues?.getOrNull(1)
     }
 
     private fun extractBoard(payload: String): List<List<String>> {
-        val key = "\"board\":"
-        val idx = payload.indexOf(key)
-        if (idx == -1) return List(3) { List(3) { "" } }
+        val boardStart = payload.indexOf("\"board\":")
+        if (boardStart == -1) return List(3) { List(3) { "" } }
 
-        val start = payload.indexOf('[', idx + key.length)
-        val end = payload.lastIndexOf(']')
-        val boardStr = payload.substring(start, end + 1)
+        val firstBracket = payload.indexOf('[', boardStart)
+        val nextPlayerIdx = payload.indexOf("\"nextPlayer\"", boardStart).let { if (it == -1) payload.length else it }
+        val boardChunk = payload.substring(firstBracket, nextPlayerIdx)
 
-        val rows = boardStr.trim().removePrefix("[").removeSuffix("]")
-            .split("],[")
-            .map { it.replace("[", "").replace("]", "") }
+        val values = """"([^"]*)"""".toRegex()
+            .findAll(boardChunk)
+            .map { it.groupValues[1].trim() }
+            .toList()
 
-        return rows.map { row ->
-            row.split(",").map { cell ->
-                cell.trim().removePrefix("\"").removeSuffix("\"")
-            }
-        }
+        val cells = values.take(9).map { it } + List((9 - values.take(9).size).coerceAtLeast(0)) { "" }
+
+        return listOf(
+            listOf(cells[0], cells[1], cells[2]),
+            listOf(cells[3], cells[4], cells[5]),
+            listOf(cells[6], cells[7], cells[8])
+        )
     }
 }
