@@ -50,13 +50,12 @@ class ServerGameService(
         }
 
         session.board[row][col] = symbol
-        session.next = if (session.next == 'X') 'O' else 'X'
 
         val winner = checkWinner(session.board)
         val draw = winner == null && isFull(session.board)
 
         if (winner != null) {
-            broadcastState(session)
+            broadcastState(session, nextPlayerOverride = "")
             applyResultToRecords(session, winner)
             broadcastRoundEnd(session, winner)
             endSession(session)
@@ -64,13 +63,14 @@ class ServerGameService(
         }
 
         if (draw) {
-            broadcastState(session)
+            broadcastState(session, nextPlayerOverride = "")
             applyDrawToRecords(session)
             broadcastRoundEnd(session, "DRAW")
             endSession(session)
             return
         }
 
+        session.next = if (session.next == 'X') 'O' else 'X'
         broadcastState(session)
     }
 
@@ -94,14 +94,16 @@ class ServerGameService(
         recordsStore.updateResult(oUser, RecordsStore.Outcome.DRAW)
     }
 
-    private fun broadcastState(session: GameSession) {
+    private fun broadcastState(session: GameSession, nextPlayerOverride: String? = null) {
         val boardJson = session.board.joinToString(prefix = "[", postfix = "]") { row ->
             row.joinToString(prefix = "[", postfix = "]") { cell ->
                 """"${if (cell == ' ') "" else cell.toString()}""""
             }
         }
 
-        val payload = """{"gameId":"${session.id}","board":$boardJson,"nextPlayer":"${session.next}"}"""
+        val next = nextPlayerOverride ?: session.next.toString()
+        val payload = """{"gameId":"${session.id}","board":$boardJson,"nextPlayer":"$next"}"""
+
         session.playerX.send(MessageType.GAME_STATE, payload)
         session.playerO.send(MessageType.GAME_STATE, payload)
     }
