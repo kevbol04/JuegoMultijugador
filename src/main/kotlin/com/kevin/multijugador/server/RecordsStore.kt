@@ -19,8 +19,50 @@ class RecordsStore(
     }
 
     fun saveRawJson(json: String) = lock.withLock {
-        ensureFile()
-        Files.writeString(filePath, json)
+        val pretty = prettyPrintJson(json)
+        Files.writeString(filePath, pretty)
+    }
+
+    private fun prettyPrintJson(json: String): String {
+        val indent = "  "
+        val sb = StringBuilder()
+        var level = 0
+        var inQuotes = false
+
+        for (char in json) {
+            when (char) {
+                '"' -> {
+                    sb.append(char)
+                    inQuotes = !inQuotes
+                }
+                '{', '[' -> {
+                    sb.append(char)
+                    if (!inQuotes) {
+                        sb.append("\n")
+                        level++
+                        sb.append(indent.repeat(level))
+                    }
+                }
+                '}', ']' -> {
+                    if (!inQuotes) {
+                        sb.append("\n")
+                        level--
+                        sb.append(indent.repeat(level))
+                    }
+                    sb.append(char)
+                }
+                ',' -> {
+                    sb.append(char)
+                    if (!inQuotes) {
+                        sb.append("\n")
+                        sb.append(indent.repeat(level))
+                    }
+                }
+                else -> sb.append(char)
+            }
+        }
+
+        return sb.toString()
     }
 
     enum class Outcome { WIN, LOSS, DRAW }
