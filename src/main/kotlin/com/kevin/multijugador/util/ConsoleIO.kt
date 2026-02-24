@@ -1,2 +1,2 @@
-package org.example.com.kevin.multijugador.util
+package com.kevin.multijugador.util
 

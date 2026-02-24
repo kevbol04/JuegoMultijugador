@@ -49,7 +49,7 @@ class ClientHandler(
                 conn.setUsername(username)
                 conn.send(MessageType.LOGIN_OK, """{"username":"$rawUsername"}""")
 
-                println("Usuarios activos: ${ActiveUsers.snapshot()}") // log útil
+                println("Usuarios activos: ${ActiveUsers.snapshot()}")
                 break
             }
 
@@ -61,6 +61,7 @@ class ClientHandler(
                 val env = JsonCodec.decode(line) ?: continue
 
                 when (env.type) {
+
                     MessageType.JOIN_QUEUE -> {
                         conn.send(MessageType.QUEUE_STATUS, """{"status":"WAITING"}""")
                         val (a, b) = queue.tryEnqueue(conn)
@@ -69,6 +70,11 @@ class ClientHandler(
                             b.send(MessageType.QUEUE_STATUS, """{"status":"MATCHED"}""")
                             gameService.startPvpGame(a, b)
                         }
+                    }
+
+                    MessageType.START_PVE -> {
+                        val diffStr = extractString(env.payloadJson, "difficulty") ?: "EASY"
+                        gameService.startPveGame(conn, diffStr)
                     }
 
                     MessageType.MAKE_MOVE -> {

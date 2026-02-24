@@ -16,4 +16,6 @@ object MessageType {
 
     const val ROUND_END = "ROUND_END"
     const val ERROR = "ERROR"
+
+    const val START_PVE = "START_PVE"
 }

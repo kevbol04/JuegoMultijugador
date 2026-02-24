@@ -1,19 +1,23 @@
 package com.kevin.multijugador.server
 
+import com.kevin.multijugador.protocol.Difficulty
 import com.kevin.multijugador.protocol.MessageType
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 class ServerGameService(
-    private val recordsStore: RecordsStore
+    private val recordsStore: RecordsStore,
+    private val aiService: AiService = AiService()
 ) {
     private val sessionsByClient = ConcurrentHashMap<ClientConnection, GameSession>()
 
     fun startPvpGame(a: ClientConnection, b: ClientConnection) {
         val session = GameSession(
             id = UUID.randomUUID().toString(),
+            mode = GameMode.PVP,
             playerX = a,
             playerO = b,
+            difficulty = null,
             board = Array(3) { CharArray(3) { ' ' } },
             next = 'X'
         )
@@ -27,13 +31,37 @@ class ServerGameService(
         broadcastState(session)
     }
 
+    fun startPveGame(human: ClientConnection, diffStr: String) {
+        val diff = runCatching { Difficulty.valueOf(diffStr.uppercase()) }
+            .getOrElse { Difficulty.EASY }
+
+        val session = GameSession(
+            id = UUID.randomUUID().toString(),
+            mode = GameMode.PVE,
+            playerX = human,
+            playerO = null,
+            difficulty = diff,
+            board = Array(3) { CharArray(3) { ' ' } },
+            next = 'X'
+        )
+
+        sessionsByClient[human] = session
+
+        human.send(MessageType.GAME_START, """{"gameId":"${session.id}","yourSymbol":"X"}""")
+        broadcastState(session)
+    }
+
     fun handleMove(client: ClientConnection, row: Int, col: Int) {
         val session = sessionsByClient[client] ?: run {
             client.send(MessageType.ERROR, """{"message":"No estás en una partida"}""")
             return
         }
 
-        val symbol = if (client == session.playerX) 'X' else 'O'
+        val symbol = when (session.mode) {
+            GameMode.PVP -> if (client == session.playerX) 'X' else 'O'
+            GameMode.PVE -> 'X'
+        }
+
         if (symbol != session.next) {
             client.send(MessageType.ERROR, """{"message":"No es tu turno"}""")
             return
@@ -55,36 +83,71 @@ class ServerGameService(
         val draw = winner == null && isFull(session.board)
 
         if (winner != null) {
-            broadcastState(session, nextPlayerOverride = "")
-            applyResultToRecords(session, winner)
-            pushRecords(session)
-            broadcastRoundEnd(session, winner)
-            endSession(session)
+            finishSession(session, winner)
             return
         }
-
         if (draw) {
-            broadcastState(session, nextPlayerOverride = "")
-            applyDrawToRecords(session)
-            pushRecords(session)
-            broadcastRoundEnd(session, "DRAW")
-            endSession(session)
+            finishSession(session, "DRAW")
             return
         }
 
         session.next = if (session.next == 'X') 'O' else 'X'
         broadcastState(session)
+
+        if (session.mode == GameMode.PVE && session.next == 'O') {
+            val aiMove = aiService.chooseMove(session.board, session.difficulty ?: Difficulty.EASY)
+            session.board[aiMove.first][aiMove.second] = 'O'
+
+            val winner2 = checkWinner(session.board)
+            val draw2 = winner2 == null && isFull(session.board)
+
+            if (winner2 != null) {
+                finishSession(session, winner2)
+                return
+            }
+            if (draw2) {
+                finishSession(session, "DRAW")
+                return
+            }
+
+            session.next = 'X'
+            broadcastState(session)
+        }
     }
 
-    private fun pushRecords(session: GameSession) {
+    private fun finishSession(session: GameSession, winner: String) {
+        broadcastState(session, nextPlayerOverride = "")
+
+        when (session.mode) {
+            GameMode.PVP -> {
+                if (winner == "DRAW") applyDrawToRecordsPvp(session)
+                else applyResultToRecordsPvp(session, winner)
+
+                pushRecordsPvp(session)
+                broadcastRoundEndPvp(session, winner)
+                endSessionPvp(session)
+            }
+
+            GameMode.PVE -> {
+                if (winner == "DRAW") applyDrawToRecordsPve(session)
+                else applyResultToRecordsPve(session, winner)
+
+                pushRecordsPve(session)
+                broadcastRoundEndPve(session, winner)
+                endSessionPve(session)
+            }
+        }
+    }
+
+    private fun pushRecordsPvp(session: GameSession) {
         val records = recordsStore.loadRawJson()
         session.playerX.send(MessageType.RECORDS_SYNC, records)
-        session.playerO.send(MessageType.RECORDS_SYNC, records)
+        session.playerO?.send(MessageType.RECORDS_SYNC, records)
     }
 
-    private fun applyResultToRecords(session: GameSession, winner: String) {
+    private fun applyResultToRecordsPvp(session: GameSession, winner: String) {
         val xUser = session.playerX.username ?: return
-        val oUser = session.playerO.username ?: return
+        val oUser = session.playerO?.username ?: return
 
         if (winner == "X") {
             recordsStore.updateResult(xUser, RecordsStore.Outcome.WIN)
@@ -95,11 +158,74 @@ class ServerGameService(
         }
     }
 
-    private fun applyDrawToRecords(session: GameSession) {
+    private fun applyDrawToRecordsPvp(session: GameSession) {
         val xUser = session.playerX.username ?: return
-        val oUser = session.playerO.username ?: return
+        val oUser = session.playerO?.username ?: return
         recordsStore.updateResult(xUser, RecordsStore.Outcome.DRAW)
         recordsStore.updateResult(oUser, RecordsStore.Outcome.DRAW)
+    }
+
+    private fun broadcastRoundEndPvp(session: GameSession, winner: String) {
+        val xUser = session.playerX.username ?: "PlayerX"
+        val oUser = session.playerO?.username ?: "PlayerO"
+
+        val payload = when (winner) {
+            "DRAW" -> """{"gameId":"${session.id}","winner":"DRAW","winnerUser":null,"loserUser":null}"""
+            "X" -> """{"gameId":"${session.id}","winner":"X","winnerUser":"$xUser","loserUser":"$oUser"}"""
+            "O" -> """{"gameId":"${session.id}","winner":"O","winnerUser":"$oUser","loserUser":"$xUser"}"""
+            else -> """{"gameId":"${session.id}","winner":"$winner","winnerUser":null,"loserUser":null}"""
+        }
+
+        session.playerX.send(MessageType.ROUND_END, payload)
+        session.playerO?.send(MessageType.ROUND_END, payload)
+    }
+
+    private fun endSessionPvp(session: GameSession) {
+        sessionsByClient.remove(session.playerX)
+        session.playerO?.let { sessionsByClient.remove(it) }
+    }
+
+    private fun pushRecordsPve(session: GameSession) {
+        val records = recordsStore.loadRawJson()
+        session.playerX.send(MessageType.RECORDS_SYNC, records)
+    }
+
+    private fun applyResultToRecordsPve(session: GameSession, winner: String) {
+        val human = session.playerX.username ?: return
+        val aiUser = "AI"
+
+        if (winner == "X") {
+            recordsStore.updateResult(human, RecordsStore.Outcome.WIN)
+            recordsStore.updateResult(aiUser, RecordsStore.Outcome.LOSS)
+        } else if (winner == "O") {
+            recordsStore.updateResult(aiUser, RecordsStore.Outcome.WIN)
+            recordsStore.updateResult(human, RecordsStore.Outcome.LOSS)
+        }
+    }
+
+    private fun applyDrawToRecordsPve(session: GameSession) {
+        val human = session.playerX.username ?: return
+        val aiUser = "AI"
+        recordsStore.updateResult(human, RecordsStore.Outcome.DRAW)
+        recordsStore.updateResult(aiUser, RecordsStore.Outcome.DRAW)
+    }
+
+    private fun broadcastRoundEndPve(session: GameSession, winner: String) {
+        val humanUser = session.playerX.username ?: "Player"
+        val aiUser = "AI"
+
+        val payload = when (winner) {
+            "DRAW" -> """{"gameId":"${session.id}","winner":"DRAW","winnerUser":null,"loserUser":null}"""
+            "X" -> """{"gameId":"${session.id}","winner":"X","winnerUser":"$humanUser","loserUser":"$aiUser"}"""
+            "O" -> """{"gameId":"${session.id}","winner":"O","winnerUser":"$aiUser","loserUser":"$humanUser"}"""
+            else -> """{"gameId":"${session.id}","winner":"$winner","winnerUser":null,"loserUser":null}"""
+        }
+
+        session.playerX.send(MessageType.ROUND_END, payload)
+    }
+
+    private fun endSessionPve(session: GameSession) {
+        sessionsByClient.remove(session.playerX)
     }
 
     private fun broadcastState(session: GameSession, nextPlayerOverride: String? = null) {
@@ -113,27 +239,7 @@ class ServerGameService(
         val payload = """{"gameId":"${session.id}","board":$boardJson,"nextPlayer":"$next"}"""
 
         session.playerX.send(MessageType.GAME_STATE, payload)
-        session.playerO.send(MessageType.GAME_STATE, payload)
-    }
-
-    private fun broadcastRoundEnd(session: GameSession, winner: String) {
-        val xUser = session.playerX.username ?: "PlayerX"
-        val oUser = session.playerO.username ?: "PlayerO"
-
-        val payload = when (winner) {
-            "DRAW" -> """{"gameId":"${session.id}","winner":"DRAW","winnerUser":null,"loserUser":null}"""
-            "X" -> """{"gameId":"${session.id}","winner":"X","winnerUser":"$xUser","loserUser":"$oUser"}"""
-            "O" -> """{"gameId":"${session.id}","winner":"O","winnerUser":"$oUser","loserUser":"$xUser"}"""
-            else -> """{"gameId":"${session.id}","winner":"$winner","winnerUser":null,"loserUser":null}"""
-        }
-
-        session.playerX.send(MessageType.ROUND_END, payload)
-        session.playerO.send(MessageType.ROUND_END, payload)
-    }
-
-    private fun endSession(session: GameSession) {
-        sessionsByClient.remove(session.playerX)
-        sessionsByClient.remove(session.playerO)
+        session.playerO?.send(MessageType.GAME_STATE, payload)
     }
 
     private fun isFull(board: Array<CharArray>): Boolean =

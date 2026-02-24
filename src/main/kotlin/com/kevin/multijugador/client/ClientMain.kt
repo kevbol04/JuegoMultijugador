@@ -113,9 +113,9 @@ object ClientMain {
 
                                     if (mineUser != null && winnerUser != null && loserUser != null) {
                                         if (mineUser == winnerUser.lowercase()) {
-                                            println("✅ Has ganado contra $loserUser")
+                                            println("Has ganado contra $loserUser")
                                         } else if (mineUser == loserUser.lowercase()) {
-                                            println("❌ Has perdido contra $winnerUser")
+                                            println("Has perdido contra $winnerUser")
                                         }
                                     }
                                 }
@@ -157,7 +157,7 @@ object ClientMain {
 
                 println("===== MENÚ PRINCIPAL =====")
                 println("1. Nueva Partida PVP")
-                println("2. Nueva Partida PVE (pendiente)")
+                println("2. Nueva Partida PVE")
                 println("3. Ver Records")
                 println("4. Configuración (pendiente)")
                 println("5. Salir")
@@ -166,6 +166,11 @@ object ClientMain {
                 when (readLine()?.trim()) {
                     "1" -> {
                         client.send(MessageType.JOIN_QUEUE, """{}""")
+                        clientState.set(ClientState.QUEUE)
+                    }
+                    "2" -> {
+                        val diff = askDifficulty()
+                        client.send(MessageType.START_PVE, """{"difficulty":"$diff"}""")
                         clientState.set(ClientState.QUEUE)
                     }
                     "3" -> {
@@ -302,5 +307,24 @@ object ClientMain {
             listOf(cells[3], cells[4], cells[5]),
             listOf(cells[6], cells[7], cells[8])
         )
+    }
+
+    private fun askDifficulty(): String {
+        while (true) {
+            println("\nDificultad IA:")
+            println("1. EASY")
+            println("2. MEDIUM")
+            println("3. HARD")
+            print("Elige: ")
+            return when (readLine()?.trim()) {
+                "1" -> "Facil"
+                "2" -> "MEDIUM"
+                "3" -> "HARD"
+                else -> {
+                    println("Opción no válida.")
+                    continue
+                }
+            }
+        }
     }
 }

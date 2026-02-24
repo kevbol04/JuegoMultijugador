@@ -92,7 +92,7 @@ class RecordsStore(
         }
 
         val json = encode(db)
-        Files.writeString(filePath, json)
+        saveRawJson(json)
     }
 
 

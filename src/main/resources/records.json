@@ -1,1 +1,25 @@
-{"players":{"kevin":{"wins":4,"losses":2,"draws":0,"streak":1,"bestStreak":2},"marc":{"wins":1,"losses":4,"draws":0,"streak":0,"bestStreak":1},"ivan":{"wins":1,"losses":0,"draws":0,"streak":1,"bestStreak":1}}}
+{
+  "players":{
+    "kevin":{
+      "wins":4,
+      "losses":0,
+      "draws":2,
+      "streak":0,
+      "bestStreak":4
+    },
+    "marc":{
+      "wins":0,
+      "losses":2,
+      "draws":0,
+      "streak":0,
+      "bestStreak":0
+    },
+    "AI":{
+      "wins":0,
+      "losses":2,
+      "draws":2,
+      "streak":0,
+      "bestStreak":0
+    }
+  }
+}
