@@ -14,17 +14,17 @@ class ServerGameService(
 ) {
     private val sessionsByClient = ConcurrentHashMap<ClientConnection, GameSession>()
 
-    // Scheduler para timeouts por turno
     private val scheduler = Executors.newScheduledThreadPool(1)
     private val timeoutTaskBySessionId = ConcurrentHashMap<String, ScheduledFuture<*>>()
 
     fun startPvpGame(a: ClientConnection, b: ClientConnection, cfg: MatchmakingQueue.GameConfig) {
         val size = cfg.boardSize.coerceIn(3, 5)
         val rounds = cfg.rounds.coerceIn(3, 7).let { if (it % 2 == 0) it + 1 else it }
-        val timeLimit = cfg.timeLimit.coerceAtLeast(0)
+
+        val timeLimit = if (cfg.turbo) 10 else cfg.timeLimit.coerceAtLeast(0)
 
         val session = GameSession(
-            id = UUID.randomUUID().toString(),
+            id = java.util.UUID.randomUUID().toString(),
             mode = GameMode.PVP,
             playerX = a,
             playerO = b,
@@ -34,6 +34,7 @@ class ServerGameService(
             xWins = 0,
             oWins = 0,
             timeLimitSec = timeLimit,
+            turbo = cfg.turbo,
             board = Array(size) { CharArray(size) { ' ' } },
             next = 'X'
         )
@@ -46,14 +47,17 @@ class ServerGameService(
         scheduleTurnTimeout(session)
     }
 
-    fun startPveGame(human: ClientConnection, diffStr: String, boardSize: Int, rounds: Int, timeLimitSec: Int) {
-        val diff = runCatching { Difficulty.valueOf(diffStr.uppercase()) }.getOrElse { Difficulty.EASY }
+    fun startPveGame(human: ClientConnection, diffStr: String, boardSize: Int, rounds: Int, timeLimitSec: Int, turbo: Boolean) {
+        val diff = runCatching { com.kevin.multijugador.protocol.Difficulty.valueOf(diffStr.uppercase()) }
+            .getOrElse { com.kevin.multijugador.protocol.Difficulty.EASY }
+
         val size = boardSize.coerceIn(3, 5)
         val totalRounds = rounds.coerceIn(3, 7).let { if (it % 2 == 0) it + 1 else it }
-        val tl = timeLimitSec.coerceAtLeast(0)
+
+        val tl = if (turbo) 10 else timeLimitSec.coerceAtLeast(0)
 
         val session = GameSession(
-            id = UUID.randomUUID().toString(),
+            id = java.util.UUID.randomUUID().toString(),
             mode = GameMode.PVE,
             playerX = human,
             playerO = null,
@@ -63,6 +67,7 @@ class ServerGameService(
             xWins = 0,
             oWins = 0,
             timeLimitSec = tl,
+            turbo = turbo,
             board = Array(size) { CharArray(size) { ' ' } },
             next = 'X'
         )
@@ -84,7 +89,7 @@ class ServerGameService(
 
         val symbol = when (session.mode) {
             GameMode.PVP -> if (client == session.playerX) 'X' else 'O'
-            GameMode.PVE -> 'X' // humano siempre X
+            GameMode.PVE -> 'X'
         }
 
         if (symbol != session.next) {
@@ -102,7 +107,6 @@ class ServerGameService(
             return
         }
 
-        // Cancelamos timeout actual porque hizo jugada válida
         cancelTurnTimeout(session)
 
         session.board[row][col] = symbol
@@ -119,22 +123,18 @@ class ServerGameService(
             return
         }
 
-        // Cambia turno
         session.next = if (session.next == 'X') 'O' else 'X'
         broadcastState(session)
 
-        // Si es PVE y toca IA, juega inmediatamente
         if (session.mode == GameMode.PVE && session.next == 'O') {
             playAiTurn(session)
             return
         }
 
-        // Programa timeout para el nuevo turno
         scheduleTurnTimeout(session)
     }
 
     private fun playAiTurn(session: GameSession) {
-        // La IA no debería esperar por timeout; juega al instante cuando le toca.
         val move = chooseAiMoveSafe(session)
         session.board[move.first][move.second] = 'O'
 
@@ -150,19 +150,12 @@ class ServerGameService(
             return
         }
 
-        // Vuelve el turno al humano
         session.next = 'X'
         broadcastState(session)
 
-        // Programa timeout para el humano
         scheduleTurnTimeout(session)
     }
 
-    /**
-     * Timeout REAL: cuando se acaba el tiempo, cambia el turno AUTOMÁTICAMENTE.
-     * - No enviamos mensajes al cliente (para que no te “moleste”).
-     * - Solo cambiamos el turno y emitimos GAME_STATE.
-     */
     private fun scheduleTurnTimeout(session: GameSession) {
         val tl = session.timeLimitSec
         if (tl <= 0) return
@@ -173,27 +166,21 @@ class ServerGameService(
         val expectedTurn = session.next
 
         val task = scheduler.schedule({
-            // Verificamos que la sesión siga viva
             val stillSession = findSessionById(sessionId) ?: return@schedule
 
-            // Si el turno ya cambió (porque jugó), no hacemos nada
             if (stillSession.next != expectedTurn) return@schedule
 
-            // Si PVE y el turno era IA, no debería pasar, pero por seguridad:
-            // (Igualmente, la IA juega inmediata y cambia el turno a X)
             if (stillSession.mode == GameMode.PVE && expectedTurn == 'O') return@schedule
 
-            // Cambia turno por timeout
+            broadcastTimeout(stillSession, expectedTurn)
             stillSession.next = if (stillSession.next == 'X') 'O' else 'X'
             broadcastState(stillSession)
 
-            // Si al cambiar toca IA, que juegue YA
             if (stillSession.mode == GameMode.PVE && stillSession.next == 'O') {
                 playAiTurn(stillSession)
                 return@schedule
             }
 
-            // Si es PVP, programa timeout para el nuevo turno
             scheduleTurnTimeout(stillSession)
 
         }, tl.toLong(), TimeUnit.SECONDS)
@@ -201,12 +188,24 @@ class ServerGameService(
         timeoutTaskBySessionId[session.id] = task
     }
 
+    private fun broadcastTimeout(session: GameSession, timedOutSymbol: Char) {
+        val payload = """{"timedOut":"$timedOutSymbol","message":"Tiempo agotado. Pierdes el turno."}"""
+        when (session.mode) {
+            GameMode.PVP -> {
+                session.playerX.send(MessageType.TIMEOUT, payload)
+                session.playerO?.send(MessageType.TIMEOUT, payload)
+            }
+            GameMode.PVE -> {
+                session.playerX.send(MessageType.TIMEOUT, payload)
+            }
+        }
+    }
+
     private fun cancelTurnTimeout(session: GameSession) {
         timeoutTaskBySessionId.remove(session.id)?.cancel(false)
     }
 
     private fun findSessionById(id: String): GameSession? {
-        // Cualquiera de los clientes mapea a la sesión
         return sessionsByClient.values.firstOrNull { it.id == id }
     }
 
@@ -241,7 +240,6 @@ class ServerGameService(
             return
         }
 
-        // Siguiente ronda
         session.round++
         session.board = Array(session.board.size) { CharArray(session.board.size) { ' ' } }
         session.next = 'X'

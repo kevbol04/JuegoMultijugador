@@ -66,14 +66,15 @@ class ClientHandler(
                         val rounds = extractInt(env.payloadJson, "rounds") ?: 3
                         val timeLimit = extractInt(env.payloadJson, "timeLimit") ?: 30
                         val turbo = extractBoolean(env.payloadJson, "turbo") ?: false
-                        val fixedTimeLimit = if (turbo && timeLimit in 1..9) 10 else timeLimit
+
+                        val effectiveTimeLimit = if (turbo) 10 else timeLimit
 
                         val entry = MatchmakingQueue.QueueEntry(
                             client = conn,
                             config = MatchmakingQueue.GameConfig(
                                 boardSize = boardSize,
                                 rounds = rounds,
-                                timeLimit = fixedTimeLimit,
+                                timeLimit = effectiveTimeLimit,
                                 turbo = turbo
                             )
                         )
@@ -94,9 +95,10 @@ class ClientHandler(
                         val rounds = extractInt(env.payloadJson, "rounds") ?: 3
                         val timeLimit = extractInt(env.payloadJson, "timeLimit") ?: 30
                         val turbo = extractBoolean(env.payloadJson, "turbo") ?: false
-                        val fixedTimeLimit = if (turbo && timeLimit in 1..9) 10 else timeLimit
 
-                        gameService.startPveGame(conn, diffStr, boardSize, rounds, fixedTimeLimit)
+                        val effectiveTimeLimit = if (turbo) 10 else timeLimit
+
+                        gameService.startPveGame(conn, diffStr, boardSize, rounds, effectiveTimeLimit, turbo)
                     }
 
                     MessageType.MAKE_MOVE -> {
@@ -119,7 +121,7 @@ class ClientHandler(
             conn.username?.let { ActiveUsers.remove(it) }
             println("Usuarios activos: ${ActiveUsers.snapshot()}")
 
-            queue.removeIfWaiting(conn) // si tu queue usa QueueEntry, ajusta esto a removeIfWaiting(entry)
+            queue.removeIfWaiting(conn)
             conn.close()
             println("Cliente desconectado")
         }
@@ -141,7 +143,7 @@ class ClientHandler(
     }
 
     private fun extractBoolean(json: String, field: String): Boolean? {
-        val regex = """"$field"\s*:\s*(true|false)""".toRegex()
-        return regex.find(json)?.groupValues?.getOrNull(1)?.toBoolean()
+        val regex = """"$field"\s*:\s*(true|false)""".toRegex(RegexOption.IGNORE_CASE)
+        return regex.find(json)?.groupValues?.getOrNull(1)?.lowercase()?.toBooleanStrictOrNull()
     }
 }

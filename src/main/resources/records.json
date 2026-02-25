@@ -1,22 +1,22 @@
 {
   "players":{
     "kevin":{
-      "wins":11,
-      "losses":1,
+      "wins":17,
+      "losses":3,
       "draws":2,
-      "streak":3,
+      "streak":2,
       "bestStreak":4
     },
     "marc":{
       "wins":0,
-      "losses":2,
+      "losses":4,
       "draws":0,
       "streak":0,
       "bestStreak":0
     },
     "AI":{
-      "wins":1,
-      "losses":9,
+      "wins":3,
+      "losses":13,
       "draws":2,
       "streak":0,
       "bestStreak":1
