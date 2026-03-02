@@ -2,7 +2,6 @@ package com.kevin.multijugador.server
 
 import com.kevin.multijugador.protocol.Difficulty
 import com.kevin.multijugador.protocol.MessageType
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
@@ -20,7 +19,6 @@ class ServerGameService(
     fun startPvpGame(a: ClientConnection, b: ClientConnection, cfg: MatchmakingQueue.GameConfig) {
         val size = cfg.boardSize.coerceIn(3, 5)
         val rounds = cfg.rounds.coerceIn(3, 7).let { if (it % 2 == 0) it + 1 else it }
-
         val timeLimit = if (cfg.turbo) 10 else cfg.timeLimit.coerceAtLeast(0)
 
         val session = GameSession(
@@ -37,7 +35,9 @@ class ServerGameService(
             turbo = cfg.turbo,
             board = Array(size) { CharArray(size) { ' ' } },
             next = 'X'
-        )
+        ).also {
+            it.turnStartedAtMs = System.currentTimeMillis()
+        }
 
         sessionsByClient[a] = session
         sessionsByClient[b] = session
@@ -48,12 +48,11 @@ class ServerGameService(
     }
 
     fun startPveGame(human: ClientConnection, diffStr: String, boardSize: Int, rounds: Int, timeLimitSec: Int, turbo: Boolean) {
-        val diff = runCatching { com.kevin.multijugador.protocol.Difficulty.valueOf(diffStr.uppercase()) }
-            .getOrElse { com.kevin.multijugador.protocol.Difficulty.EASY }
+        val diff = runCatching { Difficulty.valueOf(diffStr.uppercase()) }
+            .getOrElse { Difficulty.EASY }
 
         val size = boardSize.coerceIn(3, 5)
         val totalRounds = rounds.coerceIn(3, 7).let { if (it % 2 == 0) it + 1 else it }
-
         val tl = if (turbo) 10 else timeLimitSec.coerceAtLeast(0)
 
         val session = GameSession(
@@ -70,7 +69,9 @@ class ServerGameService(
             turbo = turbo,
             board = Array(size) { CharArray(size) { ' ' } },
             next = 'X'
-        )
+        ).also {
+            it.turnStartedAtMs = System.currentTimeMillis()
+        }
 
         sessionsByClient[human] = session
 
@@ -109,7 +110,11 @@ class ServerGameService(
 
         cancelTurnTimeout(session)
 
+        val now = System.currentTimeMillis()
+        val moveDurationMs = now - session.turnStartedAtMs
+
         session.board[row][col] = symbol
+        session.registerMove(symbol, row, col, moveDurationMs)
 
         val winner = checkWinnerNxN(session.board)
         val draw = winner == null && isFull(session.board)
@@ -124,6 +129,8 @@ class ServerGameService(
         }
 
         session.next = if (session.next == 'X') 'O' else 'X'
+        session.turnStartedAtMs = System.currentTimeMillis()
+
         broadcastState(session)
 
         if (session.mode == GameMode.PVE && session.next == 'O') {
@@ -136,6 +143,7 @@ class ServerGameService(
 
     private fun playAiTurn(session: GameSession) {
         val move = chooseAiMoveSafe(session)
+
         session.board[move.first][move.second] = 'O'
 
         val winner = checkWinnerNxN(session.board)
@@ -151,8 +159,9 @@ class ServerGameService(
         }
 
         session.next = 'X'
-        broadcastState(session)
+        session.turnStartedAtMs = System.currentTimeMillis()
 
+        broadcastState(session)
         scheduleTurnTimeout(session)
     }
 
@@ -169,11 +178,12 @@ class ServerGameService(
             val stillSession = findSessionById(sessionId) ?: return@schedule
 
             if (stillSession.next != expectedTurn) return@schedule
-
             if (stillSession.mode == GameMode.PVE && expectedTurn == 'O') return@schedule
 
             broadcastTimeout(stillSession, expectedTurn)
             stillSession.next = if (stillSession.next == 'X') 'O' else 'X'
+            stillSession.turnStartedAtMs = System.currentTimeMillis()
+
             broadcastState(stillSession)
 
             if (stillSession.mode == GameMode.PVE && stillSession.next == 'O') {
@@ -243,6 +253,7 @@ class ServerGameService(
         session.round++
         session.board = Array(session.board.size) { CharArray(session.board.size) { ' ' } }
         session.next = 'X'
+        session.turnStartedAtMs = System.currentTimeMillis()
 
         sendGameStart(session)
         broadcastState(session)
@@ -309,38 +320,65 @@ class ServerGameService(
         val xUser = session.playerX.username ?: return
         val oUser = session.playerO?.username
         val aiUser = "AI"
+        val size = session.board.size
+
+        fun outcomeFor(symbol: Char): RecordsStore.Outcome {
+            return when (finalWinner) {
+                "DRAW" -> RecordsStore.Outcome.DRAW
+                symbol.toString() -> RecordsStore.Outcome.WIN
+                else -> RecordsStore.Outcome.LOSS
+            }
+        }
 
         if (session.mode == GameMode.PVP) {
             val ou = oUser ?: return
-            when (finalWinner) {
-                "X" -> {
-                    recordsStore.updateResult(xUser, RecordsStore.Outcome.WIN)
-                    recordsStore.updateResult(ou, RecordsStore.Outcome.LOSS)
-                }
-                "O" -> {
-                    recordsStore.updateResult(ou, RecordsStore.Outcome.WIN)
-                    recordsStore.updateResult(xUser, RecordsStore.Outcome.LOSS)
-                }
-                "DRAW" -> {
-                    recordsStore.updateResult(xUser, RecordsStore.Outcome.DRAW)
-                    recordsStore.updateResult(ou, RecordsStore.Outcome.DRAW)
-                }
-            }
+
+            recordsStore.updateSeries(
+                username = xUser,
+                mode = GameMode.PVP,
+                outcome = outcomeFor('X'),
+                boardSize = size,
+                difficulty = null,
+                moveTimeMs = session.xMoveTimeMs,
+                moveCount = session.xMoveCount,
+                cellCounts = session.xCellCounts
+            )
+
+            recordsStore.updateSeries(
+                username = ou,
+                mode = GameMode.PVP,
+                outcome = outcomeFor('O'),
+                boardSize = size,
+                difficulty = null,
+                moveTimeMs = session.oMoveTimeMs,
+                moveCount = session.oMoveCount,
+                cellCounts = session.oCellCounts
+            )
+
         } else {
-            when (finalWinner) {
-                "X" -> {
-                    recordsStore.updateResult(xUser, RecordsStore.Outcome.WIN)
-                    recordsStore.updateResult(aiUser, RecordsStore.Outcome.LOSS)
-                }
-                "O" -> {
-                    recordsStore.updateResult(aiUser, RecordsStore.Outcome.WIN)
-                    recordsStore.updateResult(xUser, RecordsStore.Outcome.LOSS)
-                }
-                "DRAW" -> {
-                    recordsStore.updateResult(xUser, RecordsStore.Outcome.DRAW)
-                    recordsStore.updateResult(aiUser, RecordsStore.Outcome.DRAW)
-                }
-            }
+            recordsStore.updateSeries(
+                username = xUser,
+                mode = GameMode.PVE,
+                outcome = outcomeFor('X'),
+                boardSize = size,
+                difficulty = session.difficulty,
+                moveTimeMs = session.xMoveTimeMs,
+                moveCount = session.xMoveCount,
+                cellCounts = session.xCellCounts
+            )
+
+            /*
+            recordsStore.updateSeries(
+                username = aiUser,
+                mode = GameMode.PVE,
+                outcome = outcomeFor('O'),
+                boardSize = size,
+                difficulty = session.difficulty,
+                moveTimeMs = 0L,
+                moveCount = 0,
+                cellCounts = IntArray(25)
+            )
+            */
         }
     }
 

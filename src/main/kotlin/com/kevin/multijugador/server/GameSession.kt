@@ -25,7 +25,36 @@ data class GameSession(
     val turbo: Boolean = false,
 
     var turnTimer: ScheduledFuture<*>? = null,
-    val turnToken: AtomicLong = AtomicLong(0)
+    val turnToken: AtomicLong = AtomicLong(0),
+
+    var turnStartedAtMs: Long = System.currentTimeMillis(),
+
+    var xMoveTimeMs: Long = 0L,
+    var oMoveTimeMs: Long = 0L,
+    var xMoveCount: Int = 0,
+    var oMoveCount: Int = 0,
+
+    var xCellCounts: IntArray = IntArray(25),
+    var oCellCounts: IntArray = IntArray(25)
 ) {
     fun winsNeeded(): Int = (totalRounds / 2) + 1
+
+    fun resetRoundMetrics() {
+        turnStartedAtMs = System.currentTimeMillis()
+    }
+
+    fun registerMove(symbol: Char, row: Int, col: Int, moveDurationMs: Long) {
+        val idx = row * 5 + col
+        if (idx !in 0..24) return
+
+        if (symbol == 'X') {
+            xMoveTimeMs += moveDurationMs.coerceAtLeast(0L)
+            xMoveCount += 1
+            xCellCounts[idx] += 1
+        } else {
+            oMoveTimeMs += moveDurationMs.coerceAtLeast(0L)
+            oMoveCount += 1
+            oCellCounts[idx] += 1
+        }
+    }
 }

@@ -145,18 +145,91 @@ object ClientMain {
             val username = match.groupValues[1]
             val stats = match.groupValues[2]
 
-            fun stat(field: String): Int =
+            fun statInt(field: String): Int =
                 """"$field"\s*:\s*(\d+)""".toRegex()
                     .find(stats)
                     ?.groupValues?.getOrNull(1)
                     ?.toIntOrNull() ?: 0
 
+            fun statLong(field: String): Long =
+                """"$field"\s*:\s*(\d+)""".toRegex()
+                    .find(stats)
+                    ?.groupValues?.getOrNull(1)
+                    ?.toLongOrNull() ?: 0L
+
+            val pvpWins = statInt("pvpWins")
+            val pvpLosses = statInt("pvpLosses")
+            val pvpDraws = statInt("pvpDraws")
+
+            val pveWins = statInt("pveWins")
+            val pveLosses = statInt("pveLosses")
+            val pveDraws = statInt("pveDraws")
+
+            val pvpBestStreak = statInt("pvpBestStreak")
+            val pveBestStreak = statInt("pveBestStreak")
+
+            val pvpWins3 = statInt("pvpWins3")
+            val pvpWins4 = statInt("pvpWins4")
+            val pvpWins5 = statInt("pvpWins5")
+
+            val pveWins3 = statInt("pveWins3")
+            val pveWins4 = statInt("pveWins4")
+            val pveWins5 = statInt("pveWins5")
+
+            val easyPlayed = statInt("pveEasyPlayed")
+            val easyWins = statInt("pveEasyWins")
+            val medPlayed = statInt("pveMediumPlayed")
+            val medWins = statInt("pveMediumWins")
+            val hardPlayed = statInt("pveHardPlayed")
+            val hardWins = statInt("pveHardWins")
+
+            val totalMoveTimeMs = statLong("totalMoveTimeMs")
+            val totalMoves = statInt("totalMoves")
+            val avgSec = if (totalMoves > 0) (totalMoveTimeMs.toDouble() / totalMoves.toDouble()) / 1000.0 else 0.0
+
+            var bestR = 0
+            var bestC = 0
+            var bestCount = 0
+            for (r in 0..4) {
+                for (c in 0..4) {
+                    val key = "m${r}${c}"
+                    val count = statInt(key)
+                    if (count > bestCount) {
+                        bestCount = count
+                        bestR = r
+                        bestC = c
+                    }
+                }
+            }
+
+            fun pct(w: Int, p: Int): String {
+                if (p <= 0) return "0%"
+                val v = (w.toDouble() * 100.0) / p.toDouble()
+                return String.format("%.1f%%", v)
+            }
+
             println("Usuario: $username")
-            println("   🏆 Victorias: ${stat("wins")}")
-            println("   ❌ Derrotas: ${stat("losses")}")
-            println("   🤝 Empates: ${stat("draws")}")
-            println("   🔥 Racha actual: ${stat("streak")}")
-            println("   ⭐ Mejor racha: ${stat("bestStreak")}")
+
+            println("   🎮 PVP -> 🏆 $pvpWins | ❌ $pvpLosses | 🤝 $pvpDraws")
+            println("   🤖 PVE -> 🏆 $pveWins | ❌ $pveLosses | 🤝 $pveDraws")
+
+            println("   📏 Victorias por tablero (PVP): 3x3=$pvpWins3, 4x4=$pvpWins4, 5x5=$pvpWins5")
+            println("   📏 Victorias por tablero (PVE): 3x3=$pveWins3, 4x4=$pveWins4, 5x5=$pveWins5")
+
+            println("   🔥 Récord de victorias consecutivas: PVP=$pvpBestStreak | PVE=$pveBestStreak")
+
+            println("   ⏱️ Tiempo promedio por movimiento: ${String.format("%.2f", avgSec)}s (sobre $totalMoves movimientos)")
+
+            println("   🤖 % victorias vs IA: EASY ${pct(easyWins, easyPlayed)} ($easyWins/$easyPlayed), " +
+                    "MEDIUM ${pct(medWins, medPlayed)} ($medWins/$medPlayed), " +
+                    "HARD ${pct(hardWins, hardPlayed)} ($hardWins/$hardPlayed)")
+
+            if (bestCount > 0) {
+                println("   ⭐ Movimiento favorito: ($bestR,$bestC) -> $bestCount veces")
+            } else {
+                println("   ⭐ Movimiento favorito: (sin datos todavía)")
+            }
+
             println("---------------------------------")
         }
     }
